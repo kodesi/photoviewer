@@ -139,6 +139,25 @@ class SliderViewCell: UICollectionViewCell, UIGestureRecognizerDelegate {
         mImageView.addGestureRecognizer(doubleTapRecognizer)
 
         singleTapGesture.require(toFail: doubleTapRecognizer)
+
+        // The slider cells don't zoom themselves (only the image viewer opened by a tap or
+        // double tap does), so a pinch did nothing. A pinch out now opens that viewer zoomed in
+        // at the pinch point, the same way a double tap does.
+        let pinchRecognizer = UIPinchGestureRecognizer(
+            target: self, action: #selector(handlePinch(_:)))
+        mImageView.addGestureRecognizer(pinchRecognizer)
+    }
+    @objc func handlePinch(_ recognizer: UIPinchGestureRecognizer) {
+        guard recognizer.state == .changed, recognizer.scale > 1.05 else { return }
+        let pointInView: CGPoint = recognizer.location(in: mImageView)
+        // end this pinch so the viewer is opened only once per gesture
+        recognizer.isEnabled = false
+        recognizer.isEnabled = true
+        if let mDelegate = delegate {
+            mDelegate.didZoom(point: pointInView)
+        } else {
+            print("No delegate for that cell")
+        }
     }
     @objc func handleSingleTap(_ recognizer: UITapGestureRecognizer) {
         if let mDelegate = delegate {
