@@ -28,7 +28,8 @@ class SliderViewController: UIViewController {
     private var _selectedPosition: IndexPath?
     private var _isShare: Bool = true
     private var _isFilm: Bool = false
-    private var _imageViewer: ImageScrollViewController?
+    private var _isLaidOut: Bool = false
+    private var _didScrollToStart: Bool = false
     private var _maxZoomScale: Double = 3
     private var _compressionQuality: Double = 0.8
     private var _movieOptions: [String: Any] = [:]
@@ -219,15 +220,28 @@ class SliderViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        // also control the status bar when presented over full screen (gallery mode)
+        modalPresentationCapturesStatusBarAppearance = true
         setupGestureRecognizers()
+    }
+
+    // MARK: - Status bar
+
+    // Like the one-photo viewer: no status bar, and the X button always stays visible
+    override var prefersStatusBarHidden: Bool {
+        return true
     }
 
     // MARK: - viewWillAppear
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        view.addSubview(collectionView)
-        view.addSubview(navBar)
+        if !_isLaidOut {
+            view.addSubview(collectionView)
+            view.addSubview(navBar)
+            setupCollectionViewConstraints()
+            _isLaidOut = true
+        }
     }
 
     // MARK: - viewDidDisappear
@@ -241,15 +255,27 @@ class SliderViewController: UIViewController {
 
     override func viewWillLayoutSubviews() {
         super.viewWillLayoutSubviews()
-        updateCollectionView()
         updateLayout(view.frame.size)
         self.navBar.frame = CGRect(x: 0, y: 35,
                                    width: view.frame.size.width, height: 64)
     }
 
-    // MARK: - updateCollectionView
+    // MARK: - viewDidLayoutSubviews
 
-    private func updateCollectionView() {
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        // Open on the requested photo once. Scrolling to it on every layout pass would snap the
+        // pager back while the user swipes or zooms.
+        if !_didScrollToStart && collectionView.bounds.width > 0 {
+            _didScrollToStart = true
+            collectionView.layoutIfNeeded()
+            scrollToPage(position.row)
+        }
+    }
+
+    // MARK: - setupCollectionViewConstraints
+
+    private func setupCollectionViewConstraints() {
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         collectionView.topAnchor
             .constraint(equalTo: view.topAnchor)
@@ -263,27 +289,44 @@ class SliderViewController: UIViewController {
         collectionView.bottomAnchor
             .constraint(equalTo: view.bottomAnchor)
             .isActive = true
-        collectionView.isPagingEnabled = true
-        DispatchQueue.main.async {
-            var mPosition = self.position
-            if let selPos = self._selectedPosition {
-                mPosition = selPos
-            }
-            self.collectionView.scrollToItem(at: mPosition,
-                                             at: .centeredHorizontally,
-                                             animated: false)
-        }
-
     }
 
     // MARK: - updateLayout
 
     private func updateLayout(_ size: CGSize) {
-        let cellWidth = size.width
-        let cellHeight = size.height
         layout.scrollDirection = .horizontal
-        layout.itemSize = CGSize(width: cellWidth,
-                                 height: cellHeight)
+        if layout.itemSize != size {
+            layout.itemSize = size
+        }
+    }
+
+    // MARK: - Current page
+
+    private var currentPage: Int {
+        var mPosition = self.position
+        if let selPos = self._selectedPosition {
+            mPosition = selPos
+        }
+        return mPosition.row
+    }
+
+    private var currentCell: SliderViewCell? {
+        return collectionView.cellForItem(at: IndexPath(row: currentPage, section: 0))
+            as? SliderViewCell
+    }
+
+    private func scrollToPage(_ page: Int) {
+        guard _numImages > 0 else { return }
+        let mPage = min(max(page, 0), _numImages - 1)
+        collectionView.contentOffset = CGPoint(
+            x: CGFloat(mPage) * collectionView.bounds.width, y: 0)
+    }
+
+    private func updateSelectedPosition() {
+        let width = collectionView.bounds.width
+        guard width > 0, _numImages > 0 else { return }
+        let page = Int((collectionView.contentOffset.x / width).rounded())
+        _selectedPosition = IndexPath(row: min(max(page, 0), _numImages - 1), section: 0)
     }
 
     // MARK: - viewWillTransition
@@ -292,11 +335,18 @@ class SliderViewController: UIViewController {
         to size: CGSize,
         with coordinator: UIViewControllerTransitionCoordinator) {
         super.viewWillTransition(to: size, with: coordinator)
-        updateCollectionView()
-        updateLayout(size)
-        self.navBar.frame = CGRect(x: 0, y: 35,
-                                   width: view.frame.size.width, height: 64)
-
+        // Keep the current photo, centred at 1x
+        let page = currentPage
+        for case let cell as SliderViewCell in collectionView.visibleCells {
+            cell.resetZoom()
+        }
+        coordinator.animate(alongsideTransition: { _ in
+            self.updateLayout(size)
+            self.view.layoutIfNeeded()
+            self.scrollToPage(page)
+            self.navBar.frame = CGRect(x: 0, y: 35,
+                                       width: size.width, height: 64)
+        })
     }
 
     // MARK: - closeButtonTapped
@@ -421,9 +471,11 @@ class SliderViewController: UIViewController {
     private func setupGestureRecognizers() {
         let upSwipe = UISwipeGestureRecognizer(target: self, action: #selector(self.swipeAction(swipe:)))
         upSwipe.direction = UISwipeGestureRecognizer.Direction.up
+        upSwipe.delegate = self
         view.addGestureRecognizer(upSwipe)
         let downSwipe = UISwipeGestureRecognizer(target: self, action: #selector(self.swipeAction(swipe:)))
         downSwipe.direction = UISwipeGestureRecognizer.Direction.down
+        downSwipe.delegate = self
         view.addGestureRecognizer(downSwipe)
     }
 
@@ -462,11 +514,9 @@ extension SliderViewController: UICollectionViewDataSource {
             if let imageUrl: String = self.imageList[indexPath.row]["url"] {
                 if let title: String = self.imageList[indexPath.row]["title"] {
                     mCell.configure(imageUrl: imageUrl, title: title)
-                    mCell.delegate = self
                     return mCell
                 } else {
                     mCell.configure(imageUrl: imageUrl, title: "")
-                    mCell.delegate = self
                     return mCell
                 }
             } else {
@@ -482,94 +532,31 @@ extension SliderViewController: UICollectionViewDataSource {
 extension SliderViewController: UICollectionViewDelegate {
 
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
-        if let indexPath = collectionView.indexPathsForVisibleItems.first {
-            _selectedPosition = indexPath
+        updateSelectedPosition()
+    }
+
+    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        if !decelerate {
+            updateSelectedPosition()
         }
+    }
+
+    // A photo that leaves the screen is back at 1x when the user returns to it
+    func collectionView(_ collectionView: UICollectionView,
+                        didEndDisplaying cell: UICollectionViewCell,
+                        forItemAt indexPath: IndexPath) {
+        (cell as? SliderViewCell)?.resetZoom()
     }
 }
 
-extension SliderViewController: SliderViewCellDelegate {
-    func didShowButtons(tapCell: Bool) {
-        var mPosition = self.position
-        if let selPos = self._selectedPosition {
-            mPosition = selPos
+extension SliderViewController: UIGestureRecognizerDelegate {
+    // Swipe up/down closes the viewer only when the photo is at 1x: when zoomed in, a vertical
+    // pan moves the photo instead
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if gestureRecognizer is UISwipeGestureRecognizer {
+            return !(currentCell?.isZoomed ?? false)
         }
-        if navBar.alpha == 1.0 {
-            if let imageUrl: String = self.imageList[mPosition.row]["url"] {
-                self._imageViewer = ImageScrollViewController()
-                self._imageViewer?.delegate = self
-                self.collectionView.alpha = 0
-                self._imageViewer?.dismissCompletion = {
-                    UIView.animate(withDuration: 0.5) {
-                        self.collectionView.alpha = 1.0
-                        self.navBar.alpha = 1.0
-                    }
-                }
-
-                self._imageViewer?.url = imageUrl
-                self._imageViewer?.maxZoomScale = CGFloat(_maxZoomScale)
-                self._imageViewer?.tapCell = tapCell
-                self._imageViewer?.backgroundColor = self._backColor.setBackColor(color: self._backgroundColor)
-                if let imgViewer = self._imageViewer {
-                    imgViewer.modalPresentationStyle = .overFullScreen
-
-                    self.present(imgViewer, animated: false)
-                } else {
-                    print("no self._imageViewer")
-                }
-            } else {
-                print("No imgage available")
-            }
-
-            UIView.animate(withDuration: 0.3) {
-                self.navBar.alpha = 0.0
-            }
-        }
-    }
-
-    func didZoom(point: CGPoint) {
-        UIView.animate(withDuration: 0.0) {
-            self.navBar.alpha = 0.0
-        }
-        var mPosition = self.position
-        if let selPos = self._selectedPosition {
-            mPosition = selPos
-        }
-        if let imageUrl: String = self.imageList[mPosition.row]["url"] {
-            self._imageViewer = ImageScrollViewController()
-            self._imageViewer?.delegate = self
-            self.collectionView.alpha = 0
-            self._imageViewer?.dismissCompletion = {
-                UIView.animate(withDuration: 0.3) {
-                    self.collectionView.alpha = 1.0
-                    self.navBar.alpha = 1.0
-                }
-            }
-
-            self._imageViewer?.url = imageUrl
-            self._imageViewer?.backgroundColor = _backColor
-                .setBackColor(color: _backgroundColor)
-            self._imageViewer?.maxZoomScale = CGFloat(_maxZoomScale)
-            self._imageViewer?.zoomIn = true
-            self._imageViewer?.zoomInPoint = point
-            if let imgViewer = self._imageViewer {
-                imgViewer.modalPresentationStyle = .overFullScreen
-                self.present(imgViewer, animated: false)
-            } else {
-                print("no self._imageViewer")
-            }
-        } else {
-            print("No imgage available")
-        }
-
-    }
-}
-extension SliderViewController: ImageScrollViewControllerDelegate {
-    func didOneTap() {
-        didShowButtons(tapCell: false)
-    }
-    func didTwoTaps(point: CGPoint) {
-        didZoom(point: point)
+        return true
     }
 }
 extension UICollectionViewFlowLayout {
