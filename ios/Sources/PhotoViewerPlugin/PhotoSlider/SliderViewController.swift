@@ -126,14 +126,16 @@ class SliderViewController: UIViewController {
         navigationBar.setBackgroundImage(UIImage(), for: .default)
         navigationBar.shadowImage = UIImage()
         let navigationItem = UINavigationItem()
-        if self._isFilm {
-            navigationItem.rightBarButtonItems = [mClose, mFilm]
-        } else {
-            navigationItem.rightBarButtonItem = mClose
-        }
+        // close on the left, as in a modal (the Photos app); share and film on the right
+        navigationItem.leftBarButtonItem = mClose
+        var rightItems: [UIBarButtonItem] = []
         if self._isShare {
-            navigationItem.leftBarButtonItem = mShare
+            rightItems.append(mShare)
         }
+        if self._isFilm {
+            rightItems.append(mFilm)
+        }
+        navigationItem.rightBarButtonItems = rightItems
         navigationBar.setItems([navigationItem], animated: false)
         return navigationBar
     }()
@@ -145,6 +147,9 @@ class SliderViewController: UIViewController {
                         withConfiguration: configuration)
         bClose.image = image?.withTintColor(_btColor, renderingMode: .alwaysOriginal)
         bClose.tintColor = _btColor
+        // an explicit target: presented over full screen, the page behind keeps the first
+        // responder, and a nil-targeted action would go to the page
+        bClose.target = self
         bClose.action = #selector(closeButtonTapped)
         return bClose
     }()
@@ -156,6 +161,9 @@ class SliderViewController: UIViewController {
                         withConfiguration: configuration)
         bShare.image = image?.withTintColor(_btColor, renderingMode: .alwaysOriginal)
         bShare.tintColor = _btColor
+        // an explicit target: presented over full screen, the page behind keeps the first
+        // responder, and a nil-targeted action would go to the page
+        bShare.target = self
         bShare.action = #selector(shareButtonTapped)
         return bShare
 
@@ -169,6 +177,9 @@ class SliderViewController: UIViewController {
                         withConfiguration: configuration)
         bFilm.image = image?.withTintColor(_btColor, renderingMode: .alwaysOriginal)
         bFilm.tintColor = _btColor
+        // an explicit target: presented over full screen, the page behind keeps the first
+        // responder, and a nil-targeted action would go to the page
+        bFilm.target = self
         bFilm.action = #selector(filmButtonTapped)
         return bFilm
 
@@ -421,28 +432,23 @@ class SliderViewController: UIViewController {
 
     }
 
-    // MARK: - swipeAction
+    // MARK: - dragToClose
 
-    @objc func swipeAction(swipe: UISwipeGestureRecognizer) {
-        if mode == "slider" {
-            var mPosition = self.position
-            if let selPos = self._selectedPosition {
-                mPosition = selPos
+    @objc func dragToClose(pan: UIPanGestureRecognizer) {
+        handleDragToClose(pan) {
+            if mode == "slider" {
+                var mPosition = self.position
+                if let selPos = self._selectedPosition {
+                    mPosition = selPos
+                }
+                let vId: [String: Any] =
+                    ["result": true,
+                     "imageIndex": mPosition.row as Any
+                    ]
+                NotificationCenter.default.post(name: .photoviewerExit,
+                                                object: nil,
+                                                userInfo: vId)
             }
-            let vId: [String: Any] =
-                ["result": true,
-                 "imageIndex": mPosition.row as Any
-                ]
-            NotificationCenter.default.post(name: .photoviewerExit,
-                                            object: nil,
-                                            userInfo: vId)
-        }
-        if swipe.direction == .up {
-            // Slide-up gesture
-            dismissWithTransition(swipeDirection: "up")
-        } else if swipe.direction == .down {
-            // Slide-down gesture
-            dismissWithTransition(swipeDirection: "down")
         }
     }
 
@@ -469,14 +475,9 @@ class SliderViewController: UIViewController {
     // MARK: - setupGestureRecognizers
 
     private func setupGestureRecognizers() {
-        let upSwipe = UISwipeGestureRecognizer(target: self, action: #selector(self.swipeAction(swipe:)))
-        upSwipe.direction = UISwipeGestureRecognizer.Direction.up
-        upSwipe.delegate = self
-        view.addGestureRecognizer(upSwipe)
-        let downSwipe = UISwipeGestureRecognizer(target: self, action: #selector(self.swipeAction(swipe:)))
-        downSwipe.direction = UISwipeGestureRecognizer.Direction.down
-        downSwipe.delegate = self
-        view.addGestureRecognizer(downSwipe)
+        let drag = UIPanGestureRecognizer(target: self, action: #selector(self.dragToClose(pan:)))
+        drag.delegate = self
+        view.addGestureRecognizer(drag)
     }
 
     // MARK: - destroyAllGestures
@@ -550,13 +551,18 @@ extension SliderViewController: UICollectionViewDelegate {
 }
 
 extension SliderViewController: UIGestureRecognizerDelegate {
-    // Swipe up/down closes the viewer only when the photo is at 1x: when zoomed in, a vertical
+    // Dragging up/down closes the viewer only when the photo is at 1x: when zoomed in, a vertical
     // pan moves the photo instead
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        if gestureRecognizer is UISwipeGestureRecognizer {
-            return !(currentCell?.isZoomed ?? false)
+        if gestureRecognizer.view == view {
+            return isVerticalDrag(gestureRecognizer) && !(currentCell?.isZoomed ?? false)
         }
         return true
+    }
+    // the pager's and the photo's own pans run alongside (they don't move at 1x vertically)
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        return gestureRecognizer.view == view
     }
 }
 extension UICollectionViewFlowLayout {

@@ -111,7 +111,9 @@ public class PhotoViewerPlugin: CAPPlugin, CAPBridgedPlugin {
                     call.reject("Show : Unable to show the OneImageViewController")
                     return
                 }
-                oneImageController.modalPresentationStyle = .fullScreen
+                // over the page (not .fullScreen, which takes the page out of the window), so the
+                // page shows behind the viewer while it's dragged to close
+                oneImageController.modalPresentationStyle = .overFullScreen
                 self?.bridge?.viewController?.present(oneImageController,
                                                       animated: true, completion: {
                                                         call.resolve(["result": true])
@@ -126,7 +128,8 @@ public class PhotoViewerPlugin: CAPPlugin, CAPBridgedPlugin {
                     call.reject("Show : Unable to show the SliderViewController")
                     return
                 }
-                sliderController.modalPresentationStyle = .fullScreen
+                // over the page, so the page shows behind the viewer while it's dragged to close
+                sliderController.modalPresentationStyle = .overFullScreen
                 self?.bridge?.viewController?.present(sliderController, animated: true, completion: {
                     call.resolve(["result": true])
                 })

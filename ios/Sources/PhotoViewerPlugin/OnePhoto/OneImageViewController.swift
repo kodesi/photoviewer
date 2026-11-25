@@ -105,6 +105,9 @@ class OneImageViewController: UIViewController, UIScrollViewDelegate {
                         withConfiguration: configuration)
         bClose.image = image?.withTintColor(_btColor, renderingMode: .alwaysOriginal)
         bClose.tintColor = _btColor
+        // an explicit target: presented over full screen, the page behind keeps the first
+        // responder, and a nil-targeted action would go to the page
+        bClose.target = self
         bClose.action = #selector(closeButtonTapped)
         return bClose
     }()
@@ -116,6 +119,9 @@ class OneImageViewController: UIViewController, UIScrollViewDelegate {
                         withConfiguration: configuration)
         bShare.image = image?.withTintColor(_btColor, renderingMode: .alwaysOriginal)
         bShare.tintColor = _btColor
+        // an explicit target: presented over full screen, the page behind keeps the first
+        // responder, and a nil-targeted action would go to the page
+        bShare.target = self
         bShare.action = #selector(shareButtonTapped)
         return bShare
 
@@ -160,9 +166,10 @@ class OneImageViewController: UIViewController, UIScrollViewDelegate {
         }
 
         let navigationItem = UINavigationItem()
-        navigationItem.rightBarButtonItem = mClose
+        // close on the left, as in a modal (the Photos app); share on the right
+        navigationItem.leftBarButtonItem = mClose
         if self._isShare {
-            navigationItem.leftBarButtonItem = mShare
+            navigationItem.rightBarButtonItem = mShare
         }
         mNavBar.setItems([navigationItem], animated: false)
         mNavBar.frame = CGRect(x: 0, y: 35,
@@ -173,7 +180,8 @@ class OneImageViewController: UIViewController, UIScrollViewDelegate {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        // Do any additional setup after loading the view.
+        // hide the status bar also when presented over full screen
+        modalPresentationCapturesStatusBarAppearance = true
         view.backgroundColor = _backColor
             .setBackColor(color: _backgroundColor)
 
@@ -187,24 +195,17 @@ class OneImageViewController: UIViewController, UIScrollViewDelegate {
         destroyAllGestures()
     }
 
-    // MARK: - swipeAction
+    // MARK: - dragToClose
 
-    @objc func swipeAction(swipe: UISwipeGestureRecognizer) {
-        let vId: [String: Any] =
-            ["result": true,
-             "imageIndex": startFrom
-            ]
-        NotificationCenter.default.post(name: .photoviewerExit,
-                                        object: nil,
-                                        userInfo: vId)
-        //        self.dismissWithTransition()
-        //        self.dismiss(animated: true, completion: nil)
-        if swipe.direction == .up {
-            // Slide-up gesture
-            dismissWithTransition(swipeDirection: "up")
-        } else if swipe.direction == .down {
-            // Slide-down gesture
-            dismissWithTransition(swipeDirection: "down")
+    @objc func dragToClose(pan: UIPanGestureRecognizer) {
+        handleDragToClose(pan) {
+            let vId: [String: Any] =
+                ["result": true,
+                 "imageIndex": startFrom
+                ]
+            NotificationCenter.default.post(name: .photoviewerExit,
+                                            object: nil,
+                                            userInfo: vId)
         }
     }
 
@@ -288,17 +289,34 @@ class OneImageViewController: UIViewController, UIScrollViewDelegate {
     // MARK: - setupGestureRecognizers
 
     private func setupGestureRecognizers() {
-        let upSwipe = UISwipeGestureRecognizer(target: self, action: #selector(self.swipeAction(swipe:)))
-        upSwipe.direction = UISwipeGestureRecognizer.Direction.up
-        view.addGestureRecognizer(upSwipe)
-        let downSwipe = UISwipeGestureRecognizer(target: self, action: #selector(self.swipeAction(swipe:)))
-        downSwipe.direction = UISwipeGestureRecognizer.Direction.down
-        view.addGestureRecognizer(downSwipe)
+        // called again on rotation (the subviews are rebuilt): one drag recognizer is enough
+        if view.gestureRecognizers?.contains(where: { $0 is UIPanGestureRecognizer }) == true {
+            return
+        }
+        let drag = UIPanGestureRecognizer(target: self, action: #selector(self.dragToClose(pan:)))
+        drag.delegate = self
+        view.addGestureRecognizer(drag)
     }
 
     // MARK: - destroyAllGestures
 
     func destroyAllGestures() {
         view.gestureRecognizers?.removeAll()
+    }
+}
+
+extension OneImageViewController: UIGestureRecognizerDelegate {
+    // Dragging up/down closes the viewer only when the photo is at 1x: when zoomed in, a vertical
+    // pan moves the photo instead
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if gestureRecognizer.view == view {
+            return isVerticalDrag(gestureRecognizer) && mScrollView.zoomScale <= _minZoomScale
+        }
+        return true
+    }
+    // the photo's own pan runs alongside (it doesn't move at 1x)
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        return gestureRecognizer.view == view
     }
 }

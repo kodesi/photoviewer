@@ -26,6 +26,53 @@ extension UIViewController {
             toastLabel.removeFromSuperview()
         })
     }
+    // MARK: - Drag to close
+
+    // The viewer follows a vertical drag, up or down, and fades as it goes, uncovering the page
+    // (it's presented over full screen). Let go past a quarter of the screen, or flicked that
+    // way, it slides off and closes; otherwise it springs back. Upstream closed on any short
+    // flick (UISwipeGestureRecognizer), with no drag.
+    func handleDragToClose(_ pan: UIPanGestureRecognizer, willClose: () -> Void) {
+        let height = view.bounds.height
+        // in window coordinates: the view itself moves with the drag
+        let offset = pan.translation(in: nil).y
+        switch pan.state {
+        case .changed:
+            view.transform = CGAffineTransform(translationX: 0, y: offset)
+            view.alpha = 1 - min(abs(offset) / height, 1) * 0.6
+        case .ended, .cancelled, .failed:
+            let velocity = pan.velocity(in: nil).y
+            let farEnough = abs(offset) > height / 4
+            let flicked = abs(velocity) > 800 && (velocity > 0) == (offset > 0)
+            if pan.state == .ended && offset != 0 && (farEnough || flicked) {
+                willClose()
+                let target = offset > 0 ? height : -height
+                let duration = min(max(TimeInterval(abs(target - offset) / max(abs(velocity), 1)), 0.15), 0.3)
+                UIView.animate(withDuration: duration, delay: 0, options: .curveEaseOut, animations: {
+                    self.view.transform = CGAffineTransform(translationX: 0, y: target)
+                    self.view.alpha = 0.4
+                }, completion: { _ in
+                    self.dismiss(animated: false, completion: nil)
+                })
+            } else {
+                UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.85,
+                               initialSpringVelocity: 0, options: [.allowUserInteraction], animations: {
+                                self.view.transform = .identity
+                                self.view.alpha = 1
+                               })
+            }
+        default:
+            break
+        }
+    }
+
+    // Starts only for a drag that is more vertical than horizontal (sideways is paging)
+    func isVerticalDrag(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }
+        let velocity = pan.velocity(in: nil)
+        return abs(velocity.y) > abs(velocity.x)
+    }
+
     func dismissWithTransition(swipeDirection: String) {
         // Close button and swipe down: the standard modal dismiss, which slides the viewer
         // down and uncovers the page beneath it. Upstream pushed a window-level CATransition
