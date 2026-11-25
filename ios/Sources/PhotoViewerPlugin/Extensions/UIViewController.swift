@@ -27,20 +27,31 @@ extension UIViewController {
         })
     }
     func dismissWithTransition(swipeDirection: String) {
-        let transition = CATransition()
-        transition.duration = 0.5
-        transition.timingFunction = CAMediaTimingFunction(name: CAMediaTimingFunctionName.easeInEaseOut)
-        transition.type = CATransitionType.push
-        if swipeDirection == "up" {
-            transition.subtype = CATransitionSubtype.fromTop
-        } else if swipeDirection == "down" {
-            transition.subtype = CATransitionSubtype.fromBottom
-        } else {
-            transition.subtype = CATransitionSubtype.fromRight
+        // Close button and swipe down: the standard modal dismiss, which slides the viewer
+        // down and uncovers the page beneath it. Upstream pushed a window-level CATransition
+        // instead, which slid the page in from the top (or from the right for the close
+        // button), so the page was never beneath the viewer.
+        guard swipeDirection == "up",
+              let window = self.view.window,
+              let snapshot = self.view.snapshotView(afterScreenUpdates: false) else {
+            self.dismiss(animated: true, completion: nil)
+            return
         }
 
-        self.view.window!.layer.add(transition, forKey: nil)
-        self.dismiss(animated: false, completion: nil)
+        // Swipe up: the mirror image, the viewer slides up and uncovers the page. The page is
+        // only back in the window once the viewer is dismissed, so a snapshot of the viewer is
+        // laid over the window (zPosition keeps it above the page whatever order UIKit puts the
+        // views back in) and animated away after a non-animated dismiss.
+        snapshot.frame = self.view.convert(self.view.bounds, to: window)
+        snapshot.layer.zPosition = 1000
+        window.addSubview(snapshot)
+        self.dismiss(animated: false) {
+            UIView.animate(withDuration: 0.35, delay: 0, options: .curveEaseInOut, animations: {
+                snapshot.transform = CGAffineTransform(translationX: 0, y: -window.bounds.height)
+            }, completion: { _ in
+                snapshot.removeFromSuperview()
+            })
+        }
     }
 
 }
